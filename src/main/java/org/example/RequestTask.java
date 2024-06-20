@@ -42,18 +42,18 @@ public class RequestTask implements Runnable {
 			e1.printStackTrace();
 		}
 		String serverName = loadBalancer.serveRequest(request);
-		// each request has a mocked random time to complete
-		long timeForRequestRun = random.nextInt(5_000);
-		try {
-			Thread.sleep(timeForRequestRun);
-			loadBalancer.decrementRequestCount(serverName);
-		} catch (InterruptedException e) {
-			e.printStackTrace();
-		}
 		System.out.println("--------------------------------------");
 		if (serverName == null) {
 			System.out.println("Unable to service request: " + request);
 		} else {
+			// each request has a mocked random time to complete
+			long timeForRequestRun = random.nextInt(5_000);
+			try {
+				Thread.sleep(timeForRequestRun);
+				loadBalancer.decrementRequestCount(serverName);
+			} catch (InterruptedException e) {
+				e.printStackTrace();
+			}
 			System.out.println("Completed Request#" + requestId);
 		}
 		System.out.println("\n" + loadBalancer.getStatus() + "\n");

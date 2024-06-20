@@ -4,12 +4,15 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 
 public class LeastConnectedLoadBalancer implements LoadBalancer {
 
     private ServerActiveConnectionTracker serverTracker;
     private TimedServerPool acquiredServers;
     private Map<String, Server> serverNameToServer;
+    private Lock lock = new ReentrantLock();
 
     /**
      * Constructor
@@ -28,7 +31,7 @@ public class LeastConnectedLoadBalancer implements LoadBalancer {
      *
      * @param servers the list of servers
      */
-    private synchronized void setupServerAcquiredTime(List<Server> servers) {
+    private void setupServerAcquiredTime(List<Server> servers) {
         serverNameToServer = new ConcurrentHashMap<>();
         Random random = new Random();
         for (Server server : servers) {
@@ -51,8 +54,11 @@ public class LeastConnectedLoadBalancer implements LoadBalancer {
      * @param request the request that the LB will issue to the next server.
      */
     @Override
-    public synchronized String serveRequest(Request request) {
+    public String serveRequest(Request request) {
         Server server = getNextServer();
+        if (server == null) {
+            System.out.println();
+        }
         if (server != null) {
             server.handleIncomingRequest(request);
             incrementRequestCount(server.getName());
@@ -65,10 +71,15 @@ public class LeastConnectedLoadBalancer implements LoadBalancer {
      *
      * @param serverName the server name.
      */
-    public synchronized void incrementRequestCount(String serverName) {
-    	if (acquiredServers.get(serverName) != null) {
-    		serverTracker.updateServerCount(serverName, 1);
-    	}
+    public void incrementRequestCount(String serverName) {
+        lock.lock();
+        try {
+            if (acquiredServers.get(serverName) != null) {
+                serverTracker.updateServerCount(serverName, 1);
+            }
+        } finally {
+            lock.unlock();
+        }
     }
 
     /**
@@ -76,10 +87,15 @@ public class LeastConnectedLoadBalancer implements LoadBalancer {
      *
      * @param serverName the server name.
      */
-    public synchronized void decrementRequestCount(String serverName) {
-    	if (acquiredServers.get(serverName) != null) {
-    		serverTracker.updateServerCount(serverName, -1);
-    	}
+    public void decrementRequestCount(String serverName) {
+        lock.lock();
+        try {
+            if (acquiredServers.get(serverName) != null) {
+                serverTracker.updateServerCount(serverName, -1);
+            }
+        } finally {
+            lock.unlock();
+        }
     }
 
     /**
@@ -87,21 +103,25 @@ public class LeastConnectedLoadBalancer implements LoadBalancer {
      *
      * @return the least connected server.
      */
-    private synchronized Server getNextServer() {
+    private Server getNextServer() {
         Server server = null;
-        // while minHeap is not empty
-        while (!serverTracker.isEmpty()) {
-            String leastConnectedServerName = serverTracker.getLeastUsedServer();
-            // there is a chance that least connected server off the minHeap has timed out
-            // and isn't in the acquired servers pool anymore
-            String availableServerName = acquiredServers.get(leastConnectedServerName);
-            if (availableServerName == null) {
-                // not in servers pool so remove from server tracker and go through while loop again
-                serverTracker.removeServer(leastConnectedServerName);
-            } else {
-                server = serverNameToServer.get(availableServerName);
-                break;
+        lock.lock();
+        try {
+            // while minHeap is not empty
+            while (!serverTracker.isEmpty() && server == null) {
+                String leastConnectedServerName = serverTracker.getLeastUsedServer();
+                // there is a chance that least connected server off the minHeap has timed out
+                // and isn't in the acquired servers pool anymore
+                String availableServerName = acquiredServers.get(leastConnectedServerName);
+                if (availableServerName == null) {
+                    // not in servers pool so remove from server tracker and go through while loop again
+                    serverTracker.removeServer(leastConnectedServerName);
+                } else {
+                    server = serverNameToServer.get(availableServerName);
+                }
             }
+        } finally {
+            lock.unlock();
         }
         return server;
     }
@@ -113,14 +133,21 @@ public class LeastConnectedLoadBalancer implements LoadBalancer {
      */
     @Override
     public String getStatus() {
+        //We need to lock the LeastConnectedLoadBalancer instance below so that another thread doesn't change
+        // serverTracker or acquiredServers while a thread is running the code below.
         StringBuffer status = new StringBuffer();
-        //StringBuilder status = new StringBuilder();
-        status.append("Remaining acquired servers: ");
-        status.append(serverTracker.size());
-        status.append("\n");
-        status.append(serverTracker);
-        status.append("\n");
-        status.append(acquiredServers);
+        lock.lock();
+        try {
+            //StringBuilder status = new StringBuilder();
+            status.append("Remaining acquired servers: ");
+            status.append(serverTracker.size());
+            status.append("\n");
+            status.append(serverTracker);
+            status.append("\n");
+            status.append(acquiredServers);
+        } finally {
+            lock.unlock();
+        }
         return status.toString();
     }
 

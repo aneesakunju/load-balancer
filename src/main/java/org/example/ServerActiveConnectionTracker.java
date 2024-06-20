@@ -13,7 +13,7 @@ public class ServerActiveConnectionTracker {
 	// Priority queue of ServerCountPair objects, that sorts servers according to their
 	// lowest request count
 	private PriorityBlockingQueue<ServerCountPair> minHeap;
-
+    private Lock lock = new ReentrantLock();
 	/**
 	 * Constructor
 	 */
@@ -28,7 +28,12 @@ public class ServerActiveConnectionTracker {
 	 * @param serverName the server name
 	 */
 	public void addServer(String serverName) {
-		updateServerCount(serverName, 0);
+		lock.lock();
+		try {
+			updateServerCount(serverName, 0);
+		} finally {
+			lock.unlock();
+		}
 	}
 
 	/**
@@ -36,13 +41,18 @@ public class ServerActiveConnectionTracker {
 	 *
 	 * @param serverName the server name
 	 */
-	public synchronized void removeServer(String serverName) {
-		if (!serverToServerCountPair.containsKey(serverName)) {
-			return;
+	public void removeServer(String serverName) {
+		lock.lock();
+		try {
+			if (!serverToServerCountPair.containsKey(serverName)) {
+				return;
+			}
+			ServerCountPair pair = serverToServerCountPair.get(serverName);
+			minHeap.remove(pair);
+			serverToServerCountPair.remove(serverName);
+		} finally {
+			lock.unlock();
 		}
-		ServerCountPair pair = serverToServerCountPair.get(serverName);
-		minHeap.remove(pair);
-		serverToServerCountPair.remove(serverName);
 	}
 
 	/**
@@ -57,18 +67,23 @@ public class ServerActiveConnectionTracker {
 	 * @param serverName the server name
 	 * @param countDelta the request count delta to add to the server
 	 */
-	public synchronized void updateServerCount(String serverName, int countDelta) {
-		ServerCountPair pair = serverToServerCountPair.get(serverName);
-		// If map contains server, it exists on minHeap too.
-		// So remove object from minHeap, update its count, add it back to minHeap, to trigger sort.
-		if (pair != null) {
-			minHeap.remove(pair);
-			pair.count += countDelta;
-			minHeap.offer(pair);
-		} else {
-			pair = new ServerCountPair(countDelta, serverName);
-			serverToServerCountPair.put(serverName, pair);
-			minHeap.offer(pair);
+	public void updateServerCount(String serverName, int countDelta) {
+		lock.lock();
+		try {
+			ServerCountPair pair = serverToServerCountPair.get(serverName);
+			// If map contains server, it exists on minHeap too.
+			// So remove object from minHeap, update its count, add it back to minHeap, to trigger sort.
+			if (pair != null) {
+				minHeap.remove(pair);
+				pair.count += countDelta;
+				minHeap.offer(pair);
+			} else {
+				pair = new ServerCountPair(countDelta, serverName);
+				serverToServerCountPair.put(serverName, pair);
+				minHeap.offer(pair);
+			}
+		} finally {
+			lock.unlock();
 		}
 	}
 
@@ -78,15 +93,20 @@ public class ServerActiveConnectionTracker {
 	 *
 	 * @return the least connected server.
 	 */
-	public synchronized String getLeastUsedServer() {
-		// If min heap is empty, return null
-		if (minHeap.isEmpty()) {
-			return null;
-		}
+	public String getLeastUsedServer() {
+		lock.lock();
+		try {
+			// If min heap is empty, return null
+			if (minHeap.isEmpty()) {
+				return null;
+			}
 
-		ServerCountPair pair = minHeap.poll();
-		String serverName = pair.serverName;
-		return serverName;
+			ServerCountPair pair = minHeap.poll();
+			String serverName = pair.serverName;
+			return serverName;
+		} finally {
+			lock.unlock();
+		}
 	}
 
 	/**
@@ -112,15 +132,20 @@ public class ServerActiveConnectionTracker {
 	@Override
 	public String toString() {
 		StringBuffer result = new StringBuffer();
-		result.append("ServerActiveConnectionTracker [");
-		for (Map.Entry<String, ServerCountPair> entrySet : serverToServerCountPair.entrySet()) {
-			result.append("\nserver=");
-			result.append(entrySet.getKey());
-			result.append(", active connections=");
-			result.append(entrySet.getValue().count);
-			result.append("; ");
+		lock.lock();
+		try {
+			result.append("ServerActiveConnectionTracker [");
+			for (Map.Entry<String, ServerCountPair> entrySet : serverToServerCountPair.entrySet()) {
+				result.append("\nserver=");
+				result.append(entrySet.getKey());
+				result.append(", active connections=");
+				result.append(entrySet.getValue().count);
+				result.append("; ");
+			}
+			result.append("]");
+		} finally {
+			lock.unlock();
 		}
-		result.append("]");
 		return result.toString();
 	}
 

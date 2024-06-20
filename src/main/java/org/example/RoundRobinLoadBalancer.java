@@ -4,11 +4,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 
 public class RoundRobinLoadBalancer implements LoadBalancer {
     private List<Server> servers;
     private AtomicInteger currentIndex;
     private Map<String, Integer> serverToRequestCount;
+    private Lock lock = new ReentrantLock();
 
 	/**
 	 * Constructor
@@ -61,14 +64,20 @@ public class RoundRobinLoadBalancer implements LoadBalancer {
 	 * @return the status of the servers.
 	 */
     @Override
-    public synchronized String getStatus() {
+    public String getStatus() {
     	StringBuilder status = new StringBuilder();
+		lock.lock();
         // private Map<String, Integer> serverToRequestCount;
-    	for (Map.Entry<String, Integer> entry : serverToRequestCount.entrySet()) {
-    		status.append("Server name: " + entry.getKey());
-    		status.append(", active connections: " + entry.getValue());
-    		status.append("\n");
-    	}
+		try {
+			for (Map.Entry<String, Integer> entry : serverToRequestCount.entrySet()) {
+				status.append("Server name: " + entry.getKey());
+				status.append(", active connections: " + entry.getValue());
+				status.append("\n");
+			}
+		} finally {
+			lock.unlock();
+		}
+
         return status.toString();
     }
 
@@ -78,9 +87,14 @@ public class RoundRobinLoadBalancer implements LoadBalancer {
 	 * @param serverName the server name.
 	 */
 	@Override
-	public synchronized void incrementRequestCount(String serverName) {
-		if (serverToRequestCount.containsKey(serverName)) {
-			serverToRequestCount.put(serverName, serverToRequestCount.get(serverName) + 1);
+	public void incrementRequestCount(String serverName) {
+		lock.lock();
+		try {
+			if (serverToRequestCount.containsKey(serverName)) {
+				serverToRequestCount.put(serverName, serverToRequestCount.get(serverName) + 1);
+			}
+		} finally {
+			lock.unlock();
 		}
 	}
 
@@ -90,9 +104,14 @@ public class RoundRobinLoadBalancer implements LoadBalancer {
 	 * @param serverName the server name.
 	 */
 	@Override
-	public synchronized void decrementRequestCount(String serverName) {
-		if (serverToRequestCount.containsKey(serverName)) {
-			serverToRequestCount.put(serverName, serverToRequestCount.get(serverName) - 1);
+	public void decrementRequestCount(String serverName) {
+		lock.lock();
+		try {
+			if (serverToRequestCount.containsKey(serverName)) {
+				serverToRequestCount.put(serverName, serverToRequestCount.get(serverName) - 1);
+			}
+		} finally {
+			lock.unlock();
 		}
 	}
 

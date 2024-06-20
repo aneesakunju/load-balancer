@@ -5,6 +5,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 
 public class TimedServerPool {
 
@@ -12,7 +14,7 @@ public class TimedServerPool {
 	// Each thread in the thread pool represents a server and will delay <server's expiryTime> and then
 	// run removeExpiredEntries() to remove the server from the list of available servers.
 	private final ScheduledExecutorService executorService;
-
+	private Lock lock = new ReentrantLock();
 	/**
 	 * Constructs a TimedServerPool object that consists of a Map and a ScheduledExecutorService.
 	 *
@@ -38,10 +40,15 @@ public class TimedServerPool {
 	 * @param key              the server name
 	 * @param expiryTimeMillis how long the server will be kept in the pool
 	 */
-	public synchronized void put(String key, long expiryTimeMillis) {
-		serverToTimedValue.put(key, new TimedValue(key, expiryTimeMillis));
-		// Remove server from pool after it times out, ie in expiryTimeMillis.
-		startCleanupTask(expiryTimeMillis);
+	public void put(String key, long expiryTimeMillis) {
+		lock.lock();
+		try {
+			serverToTimedValue.put(key, new TimedValue(key, expiryTimeMillis));
+			// Remove server from pool after it times out, ie in expiryTimeMillis.
+			startCleanupTask(expiryTimeMillis);
+		} finally {
+			lock.unlock();
+		}
 	}
 
 	/**
@@ -50,9 +57,14 @@ public class TimedServerPool {
 	 * @param key the key to use
 	 * @return the TimedValue object
 	 */
-	public synchronized String get(String key) {
-		TimedValue timedValue = serverToTimedValue.get(key);
-		return timedValue != null ? timedValue.getKey() : null;
+	public String get(String key) {
+		lock.lock();
+		try {
+			TimedValue timedValue = serverToTimedValue.get(key);
+			return timedValue != null ? timedValue.getKey() : null;
+		} finally {
+			lock.unlock();
+		}
 	}
 
 	/**
@@ -71,25 +83,31 @@ public class TimedServerPool {
 	 * that a server's expiryTime has elapsed and thus needs to be removed.
 	 *
 	 */
-	private synchronized void removeExpiredEntries() {
+	private void removeExpiredEntries() {
 		long currentTime = System.currentTimeMillis();
 		String serverToRemove = null;
 		TimedValue timedValue = null;
-		for (Map.Entry<String, TimedValue> entry : serverToTimedValue.entrySet()) {
-			if (entry.getValue().isExpired(currentTime)) {
-				serverToRemove = entry.getKey();
-				timedValue = entry.getValue();
-				break;
+
+		lock.lock();
+		try {
+			for (Map.Entry<String, TimedValue> entry : serverToTimedValue.entrySet()) {
+				if (entry.getValue().isExpired(currentTime)) {
+					serverToRemove = entry.getKey();
+					timedValue = entry.getValue();
+					break;
+				}
 			}
-		}
-		if (serverToRemove != null) {
-			serverToTimedValue.remove(serverToRemove);
-			System.out.println("==> Released Server " + serverToRemove + ", total time server [expiry time = "
-					+ +timedValue.expiryTimeMillis + " ms] was acquired until time of release: "
-					+ timedValue.getElapsedTime() + " ms");
-		}
-		if (serverToTimedValue.isEmpty()) {
-			shutdown();
+			if (serverToRemove != null) {
+				serverToTimedValue.remove(serverToRemove);
+				System.out.println("==> Released Server " + serverToRemove + ", total time server [expiry time = "
+						+ +timedValue.expiryTimeMillis + " ms] was acquired until time of release: "
+						+ timedValue.getElapsedTime() + " ms");
+			}
+			if (serverToTimedValue.isEmpty()) {
+				shutdown();
+			}
+		} finally {
+			lock.unlock();
 		}
 	}
 
@@ -99,7 +117,12 @@ public class TimedServerPool {
 	 * @return the number of servers remaining
 	 */
 	public int size() {
-		return serverToTimedValue.size();
+		lock.lock();
+		try {
+			return serverToTimedValue.size();
+		} finally {
+			lock.unlock();
+		}
 	}
 
 	/**
@@ -108,7 +131,12 @@ public class TimedServerPool {
 	 * @return true if there are servers remaining
 	 */
 	public boolean isEmpty() {
-		return serverToTimedValue.size() == 0;
+		lock.lock();
+		try {
+			return serverToTimedValue.size() == 0;
+		} finally {
+			lock.unlock();
+		}
 	}
 
 	/**
@@ -120,17 +148,22 @@ public class TimedServerPool {
 
 	@Override
 	public String toString() {
-		StringBuilder result = new StringBuilder();
-		result.append("TimedServerPool [");
-		for (Map.Entry<String, TimedValue> entrySet : serverToTimedValue.entrySet()) {
-			result.append("\nserver=");
-			result.append(entrySet.getKey());
-			result.append(", milliseconds remaining=");
-			result.append(entrySet.getValue().getMillisecondsRemaining());
-			result.append("; ");
+		lock.lock();
+		try {
+			StringBuilder result = new StringBuilder();
+			result.append("TimedServerPool [");
+			for (Map.Entry<String, TimedValue> entrySet : serverToTimedValue.entrySet()) {
+				result.append("\nserver=");
+				result.append(entrySet.getKey());
+				result.append(", milliseconds remaining=");
+				result.append(entrySet.getValue().getMillisecondsRemaining());
+				result.append("; ");
+			}
+			result.append("]");
+			return result.toString();
+		} finally {
+			lock.unlock();
 		}
-		result.append("]");
-		return result.toString();
 	}
 
 	/**
